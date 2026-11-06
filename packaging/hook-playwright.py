@@ -49,7 +49,8 @@ if driver.is_dir():
     # per-file list makes the collected tree obvious in the build log.
     for path in driver.rglob('*'):
         if path.is_file():
-            datas.append((str(path), str(Path('playwright') / path.relative_to(package_dir))))
+            # Dest must be the CONTAINING directory: (src_file, dest_dir).
+            datas.append((str(path), str(Path('playwright') / path.parent.relative_to(package_dir))))
 else:  # pragma: no cover - a broken install is not worth failing the build over
     print('[hook-playwright] WARNING: playwright driver directory not found; '
           'JavaScript rendering will not work in the packaged app')

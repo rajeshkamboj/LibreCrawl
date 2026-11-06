@@ -14,6 +14,7 @@ Run without a Windows machine or a built exe:
 """
 import contextlib
 import importlib
+import importlib.util
 import os
 import sys
 import tempfile
@@ -186,13 +187,66 @@ def test_resource_paths_follow_meipass():
                 sys._MEIPASS = real_meipass
 
 
+def load_hook(path, name):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_pyinstaller_hook_collects_playwright_driver():
+    """The Playwright hook must ship a valid (src_file, dest_dir) data list.
+
+    A first CI attempt shipped 118 driver files whose `dest` was the file path
+    instead of its folder, so PyInstaller tried to create a directory named
+    LICENSE where a file already existed and aborted the whole build.
+    """
+    hook_path = Path(__file__).resolve().parent.parent / 'packaging' / 'hook-playwright.py'
+    result('the Playwright hook exists', hook_path.is_file())
+    if not hook_path.is_file():
+        return
+
+    hook = load_hook(hook_path, 'hook_playwright')
+    result('hook exposes hiddenimports', bool(hook.hiddenimports))
+    result('hook collects playwright driver data', len(hook.datas) > 0,
+           f'{len(hook.datas)} entries')
+
+    if importlib.util.find_spec('playwright') is None:
+        result('playwright driver entry shape is valid', True, 'skipped, playwright not installed')
+        return
+
+    import playwright
+    site_packages = Path(playwright.__file__).resolve().parent.parent
+
+    # Every dest must be an existing directory and must be the file's parent.
+    not_a_dir = [d for _, d in hook.datas if not (site_packages / d).is_dir()]
+    result('every dest is a directory, never a file path', not not_a_dir, str(not_a_dir[:2]))
+
+    wrong_parent = [(src, d) for src, d in hook.datas
+                    if Path(src).parent != (site_packages / d)]
+    result('each file lands in its own directory', not wrong_parent, str(wrong_parent[:2]))
+
+    # (dest, filename) collisions make PyInstaller abort.
+    seen, collisions = set(), []
+    for src, dest in hook.datas:
+        key = (dest, Path(src).name)
+        if key in seen:
+            collisions.append(key)
+        seen.add(key)
+    result('no two files claim the same destination', not collisions, str(collisions[:2]))
+
+    result('the node driver binary is collected',
+           any(Path(src).name == 'node' for src, _ in hook.datas))
+
+
 def main():
     for test in (test_source_checkout_keeps_repo_data_dir,
                  test_frozen_windows_uses_appdata,
                  test_data_dir_override,
                  test_secret_key_persists,
                  test_bundled_chromium_detection,
-                 test_resource_paths_follow_meipass):
+                 test_resource_paths_follow_meipass,
+                 test_pyinstaller_hook_collects_playwright_driver):
         print(f'\n{test.__name__}:')
         test()
 

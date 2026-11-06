@@ -79,3 +79,4 @@ python tests/packaging_tests.py
 | `test_secret_key_persists` | A new random key every launch logs the user out on restart |
 | `test_bundled_chromium_detection` | Bundled Chromium is not found (JS rendering fails), or a user-set `PLAYWRIGHT_BROWSERS_PATH` is overwritten |
 | `test_resource_paths_follow_meipass` | Templates/static files are looked for next to the `.exe` instead of inside the bundle, so the UI returns 500s |
+| `test_pyinstaller_hook_collects_playwright_driver` | The Playwright hook ships 118 driver files with a wrong `dest` (a file path instead of its folder), and PyInstaller aborts the build with "already exists a file at that path" |
