@@ -9,8 +9,11 @@ import secrets
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 
-# Database file location - stored in data/ for Docker volume persistence
-DB_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'users.db')
+from src.app_paths import db_path
+
+# Database file location - data/ in a source checkout or Docker (volume
+# persistence), %APPDATA%/LibreCrawl in the packaged Windows app.
+DB_FILE = str(db_path(create=False))
 
 @contextmanager
 def get_db():

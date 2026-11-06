@@ -7,3 +7,9 @@ data/*.db-wal
 data/*.db-shm
 
 .env
+
+# Windows / PyInstaller build output
+build/
+dist/
+*.spec.bak
+packaging/version_info.txt.bak

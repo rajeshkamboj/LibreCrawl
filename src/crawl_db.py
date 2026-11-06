@@ -9,9 +9,11 @@ import time
 from datetime import datetime
 from contextlib import contextmanager
 
-# Database file location (same as auth database) - stored in data/ for Docker volume persistence
-import os
-DB_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'users.db')
+# Database file location (same as auth database) - data/ in a source checkout
+# or Docker (volume persistence), %APPDATA%/LibreCrawl in the Windows build.
+from src.app_paths import db_path
+
+DB_FILE = str(db_path(create=False))
 
 @contextmanager
 def get_db():

@@ -24,6 +24,12 @@
                     <button class="btn btn-success" id="saveCrawlBtn" onclick="saveCrawl()" disabled>Save Crawl</button>
                     <button class="btn btn-primary" id="loadCrawlBtn" onclick="loadCrawl()">Load Crawl</button>
                     <button class="btn btn-danger" onclick="logout()" style="margin-left: 10px;">Logout</button>
+                    {% if desktop_mode %}
+                    <!-- Packaged desktop app: there is no console window to close. -->
+                    <button class="btn btn-secondary" id="quitBtn" onclick="quitLibreCrawl()"
+                            style="margin-left: 6px;"
+                            title="Save any running crawl and stop LibreCrawl">Quit</button>
+                    {% endif %}
                 </div>
             </div>
         </header>

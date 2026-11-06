@@ -16,6 +16,22 @@ class JavaScriptRenderer:
         self.page_pool = []
         self.pool_lock = threading.Lock()
 
+    @staticmethod
+    def _browser_missing_help():
+        """Explain where Chromium is expected when the launch fails.
+
+        The Windows build ships Chromium inside the install directory, so a
+        failure here means the browser folder was moved or deleted rather than
+        that the user needs to run pip.
+        """
+        import os
+        return (
+            "Chromium is not available. The Windows build looks for it in "
+            f"'{os.environ.get('PLAYWRIGHT_BROWSERS_PATH', 'the default Playwright cache')}'. "
+            "Reinstall LibreCrawl, or set PLAYWRIGHT_BROWSERS_PATH to a folder "
+            "created by 'playwright install chromium'."
+        )
+
     async def initialize(self):
         """Initialize Playwright browser and page pool"""
         try:
@@ -51,9 +67,12 @@ class JavaScriptRenderer:
             print(f"JavaScript rendering initialized with {len(self.page_pool)} browser pages")
 
         except Exception as e:
-            print(f"Failed to initialize JavaScript rendering: {e}")
+            message = str(e)
+            if 'Executable doesn' in message or "executable doesn't exist" in message.lower():
+                message = f"{message}\n{self._browser_missing_help()}"
+            print(f"Failed to initialize JavaScript rendering: {message}")
             await self.cleanup()
-            raise
+            raise RuntimeError(message) from e
 
     async def cleanup(self):
         """Clean up Playwright browser and resources"""

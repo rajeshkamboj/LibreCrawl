@@ -1,0 +1,34 @@
+# Windows version resource for LibreCrawl.exe.
+# Read by PyInstaller through the `version=` argument in librecrawl.spec.
+# Keep the numbers in sync with the VERSION file; packaging/build_windows.ps1
+# rewrites this file before each build so Explorer properties stay accurate.
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo(
+      [
+        StringTable(
+          u'040904B0',
+          [StringStruct(u'CompanyName', u'LibreCrawl'),
+           StringStruct(u'FileDescription', u'LibreCrawl - SEO Spider'),
+           StringStruct(u'FileVersion', u'1.0.0'),
+           StringStruct(u'InternalName', u'LibreCrawl'),
+           StringStruct(u'LegalCopyright', u'LibreCrawl contributors - MIT licensed'),
+           StringStruct(u'OriginalFilename', u'LibreCrawl.exe'),
+           StringStruct(u'ProductName', u'LibreCrawl'),
+           StringStruct(u'ProductVersion', u'1.0.0'),
+           StringStruct(u'Comments', u'https://librecrawl.com')])
+      ]
+    ),
+    VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
+  ]
+)
