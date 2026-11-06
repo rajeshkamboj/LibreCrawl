@@ -48,6 +48,34 @@ LibreCrawl crawls websites and gives you detailed information about pages, links
 - ⚡ **Real-time crawling progress** with live statistics
 
 ## Getting started
+
+### Windows desktop app (.exe)
+
+Prefer not to install Python or Docker? Download the Windows installer from the
+[latest release](https://github.com/PhialsBasement/LibreCrawl/releases/latest):
+
+1. Run `LibreCrawl-Setup-x.y.z.exe` (no admin rights needed, installs per-user).
+2. Launch **LibreCrawl** from the Start menu. It starts a local server and opens
+   your browser at `http://localhost:5000`.
+3. Click **Quit** in the top-right of the LibreCrawl window to stop it. Any
+   running crawl is saved first.
+
+The installer bundles everything, including Chromium for JavaScript rendering,
+so it works offline and there is nothing else to install. It binds to
+`localhost` only, so it is not reachable from your network.
+
+Where your data lives (survives upgrades and uninstalls):
+
+| What | Location |
+|---|---|
+| Crawl history and settings | `%APPDATA%\LibreCrawl\users.db` |
+| Log file | `%APPDATA%\LibreCrawl\logs\librecrawl.log` |
+| The app itself | `%LOCALAPPDATA%\Programs\LibreCrawl` |
+
+It runs in local mode with no sign-in. Useful switches if you launch it from a
+terminal: `--port 5001`, `--no-browser`, `--host 0.0.0.0` (share on your LAN).
+Building the installer yourself is covered in [packaging/README.md](packaging/README.md).
+
 ### Quick Start (Automatic Installation)
 
 **The easiest way to run LibreCrawl** - just run the startup script and it handles everything:

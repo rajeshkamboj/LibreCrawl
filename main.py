@@ -10,6 +10,7 @@ import secrets
 import string
 import os
 import re
+import sys
 import base64
 from io import StringIO, BytesIO
 from datetime import datetime, timedelta
@@ -18,6 +19,14 @@ from datetime import datetime, timedelta
 # SMTP settings, for one) read environment variables at import time.
 from dotenv import load_dotenv
 load_dotenv()
+
+from src.app_paths import (bundled_chromium_env, data_dir, ensure_secret_key,
+                           is_first_run, is_frozen, log_dir, resource_path)
+
+# Must happen before src.crawler imports playwright: Playwright reads
+# PLAYWRIGHT_BROWSERS_PATH at import time and only then looks for the
+# Chromium bundled next to the .exe.
+BUNDLED_CHROMIUM = bundled_chromium_env()
 
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 from flask_compress import Compress
@@ -44,11 +53,25 @@ parser.add_argument('--disable-guest', '-dg', action='store_true',
                     help='Disable guest login')
 parser.add_argument('--demo', '-dm', action='store_true',
                     help='Demo mode: 1.5GB memory limit per user, crawls auto-stop at limit')
+parser.add_argument('--host', default=None,
+                    help='Interface to bind (default: 127.0.0.1 in the packaged '
+                         'app, 0.0.0.0 elsewhere). Env: HOST_BINDING')
+parser.add_argument('--port', '-p', type=int, default=None,
+                    help='Port to listen on (default: 5000). Env: PORT')
+parser.add_argument('--no-browser', action='store_true',
+                    help='Do not open a browser window on startup')
 parser.add_argument('--dangerously-skip-auth', '-dsa', action='store_true',
                     help='DANGEROUS: Allow anyone to log in as any username with no password. '
                          'The username is only used to separate per-user sessions. '
                          'Do NOT use on a public network or in production.')
 args = parser.parse_args()
+
+# The packaged Windows app is a single-user desktop tool: it has no email
+# server and no admin to approve accounts, so it has always to run in local
+# mode. Note this is decided by `is_frozen()`, not by argv, because a
+# double-clicked .exe passes no arguments.
+if is_frozen() and os.getenv('LOCAL_MODE', '').lower() not in ('true', '1', 'yes'):
+    args.local = True
 
 LOCAL_MODE = args.local or os.getenv('LOCAL_MODE', '').lower() in ('true', '1', 'yes')
 DISABLE_REGISTER = args.disable_register or os.getenv('REGISTRATION_DISABLED', '').lower() in ('true', '1', 'yes')
@@ -57,17 +80,114 @@ DEMO_MODE = args.demo or os.getenv('DEMO_MODE', '').lower() in ('true', '1', 'ye
 SKIP_AUTH = args.dangerously_skip_auth or os.getenv('DANGEROUSLY_SKIP_AUTH', '').lower() in ('true', '1', 'yes')
 ZOHO = ZohoOAuthConfig(registration_disabled=DISABLE_REGISTER)
 
-app = Flask(__name__, template_folder='web/templates', static_folder='web/static')
-app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
-if not os.environ.get('SECRET_KEY'):
+
+class _NullStream:
+    """Stand-in for sys.stdout/stderr in a windowed PyInstaller build.
+
+    With no console attached Python sets those streams to None and every
+    print() raises AttributeError, which would kill the app on its first log
+    line. Writing to nowhere is the correct behaviour there.
+    """
+
+    def write(self, *args, **kwargs):
+        return 0
+
+    def flush(self):
+        pass
+
+    def isatty(self):
+        return False
+
+    @property
+    def encoding(self):
+        return 'utf-8'
+
+
+class _TeeStream:
+    """Writes to the console (if any) and to a log file."""
+
+    def __init__(self, original, logfile):
+        self._original = original
+        self._logfile = logfile
+
+    def write(self, data):
+        try:
+            if self._original is not None:
+                self._original.write(data)
+        except Exception:
+            pass
+        try:
+            self._logfile.write(data)
+            self._logfile.flush()
+        except Exception:
+            pass
+        return len(data)
+
+    def flush(self):
+        for stream in (self._original, self._logfile):
+            try:
+                if stream is not None:
+                    stream.flush()
+            except Exception:
+                pass
+
+    def isatty(self):
+        return False
+
+    @property
+    def encoding(self):
+        return 'utf-8'
+
+
+def setup_frozen_streams():
+    """Give the packaged app a console-safe stdout/stderr and a log file."""
+    null = _NullStream()
+    for name in ('stdout', 'stderr'):
+        if getattr(sys, name, None) is None:
+            setattr(sys, name, null)
+
+    if not is_frozen():
+        return None
+
+    try:
+        logfile = open(log_dir() / 'librecrawl.log', 'a', encoding='utf-8',
+                       errors='replace', buffering=1)
+    except Exception as e:  # a read-only log location must not stop the app
+        print(f"Could not open log file: {e}")
+        return None
+
+    logfile.write(f"\n===== LibreCrawl started {datetime.now():%Y-%m-%d %H:%M:%S} =====\n")
+    sys.stdout = _TeeStream(sys.stdout, logfile)
+    sys.stderr = _TeeStream(sys.stderr, logfile)
+    return logfile
+
+
+setup_frozen_streams()
+
+# Resolved through app_paths so a frozen build (PyInstaller) finds the bundled
+# templates/static files instead of looking for them next to the .exe.
+app = Flask(__name__,
+            template_folder=str(resource_path('web', 'templates')),
+            static_folder=str(resource_path('web', 'static')))
+if is_frozen():
+    # Persist the key in %APPDATA%\LibreCrawl so logins survive a restart.
+    app.secret_key = ensure_secret_key()
+else:
+    app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
+if not is_frozen() and not os.environ.get('SECRET_KEY'):
     print('⚠️  WARNING: SECRET_KEY not set — using an ephemeral random key. '
           'Sessions will not persist across restarts. Set SECRET_KEY in production.', flush=True)
 
 # Enable compression for all responses
 Compress(app)
 
-# Ensure data directory exists before initializing the database
-os.makedirs("data", exist_ok=True)
+# Ensure data directory exists before initializing the database. In a frozen
+# Windows build this is %APPDATA%\LibreCrawl (the install dir is read-only).
+DATA_DIR = data_dir()  # creates the directory if needed
+
+# Captured before the database is created, so the first launch can say where
+# its data will be stored.
+FIRST_RUN = is_first_run()
 
 # Initialize database on startup
 init_db()
@@ -81,7 +201,7 @@ def auto_login_local_mode():
     """Auto-login for local mode - creates or logs into 'local' admin account"""
     import sqlite3
     try:
-        conn = sqlite3.connect(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'users.db'))
+        conn = sqlite3.connect(str(data_dir() / 'users.db'))
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -117,7 +237,8 @@ def auto_login_local_mode():
             session.permanent = True
 
             print(f"Created and auto-logged in as new 'local' admin user (ID: {user_id})")
-            print(f"Generated password: {random_password}")
+            if not is_frozen():
+                print(f"Generated password: {random_password}")
 
         conn.close()
         return True
@@ -136,7 +257,7 @@ def skip_auth_login(username):
     """
     import sqlite3
     try:
-        conn = sqlite3.connect(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'users.db'))
+        conn = sqlite3.connect(str(data_dir() / 'users.db'))
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -693,7 +814,7 @@ def register():
             from src.auth_db import verify_user, set_user_tier
             # Get the user that was just created
             import sqlite3
-            conn = sqlite3.connect(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'users.db'))
+            conn = sqlite3.connect(str(data_dir() / 'users.db'))
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute('SELECT id FROM users WHERE username = ?', (username,))
@@ -793,6 +914,47 @@ def guest_login():
 def logout():
     session.clear()
     return jsonify({'success': True, 'message': 'Logged out successfully'})
+
+# ------------------------------------------------------------------
+# Desktop (packaged .exe) support
+# ------------------------------------------------------------------
+DESKTOP_MODE = is_frozen()
+
+
+@app.context_processor
+def inject_desktop_flag():
+    """Lets templates show desktop-only controls (e.g. Quit)."""
+    return {'desktop_mode': DESKTOP_MODE}
+
+
+@app.route('/api/desktop/quit', methods=['POST'])
+def desktop_quit():
+    """Stop the packaged app's server and exit the process.
+
+    A windowed .exe has no console to close and no tray icon, so without this
+    the only way to stop LibreCrawl would be Task Manager. Only available in
+    the packaged build: a self-hosted server must not be stoppable over HTTP.
+    """
+    if not DESKTOP_MODE:
+        return jsonify({'success': False, 'error': 'Not available'}), 404
+
+    def shutdown():
+        time.sleep(0.5)  # let the response reach the browser first
+        print("Shutdown requested from the UI - saving crawls and exiting.")
+        try:
+            with instances_lock:
+                for instance_data in list(crawler_instances.values()):
+                    crawler = instance_data['crawler']
+                    if crawler.is_running and crawler.crawl_id and crawler.db_save_enabled:
+                        crawler._save_batch_to_db(force=True)
+                        crawler._save_queue_checkpoint()
+        except Exception as e:
+            print(f"Error while saving crawls on quit: {e}")
+        os._exit(0)
+
+    threading.Thread(target=shutdown, daemon=True).start()
+    return jsonify({'success': True, 'message': 'LibreCrawl is shutting down'})
+
 
 @app.route('/api/user/info')
 @login_required
@@ -1517,7 +1679,7 @@ def crawl_stats():
         import sqlite3
 
         # Get counts by status
-        conn = sqlite3.connect(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'users.db'))
+        conn = sqlite3.connect(str(data_dir() / 'users.db'))
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -2196,12 +2358,81 @@ def graceful_shutdown(signum, frame):
     import sys
     sys.exit(0)
 
+APP_MUTEX_HANDLE = None
+
+
+def _is_librecrawl_running(host, port, timeout=0.6):
+    """True if something answering like LibreCrawl is already on host:port."""
+    import urllib.request
+    probe = '127.0.0.1' if host in ('0.0.0.0', '::', '') else host
+    try:
+        with urllib.request.urlopen(f'http://{probe}:{port}/login', timeout=timeout) as resp:
+            body = resp.read(4096).decode('utf-8', 'replace').lower()
+        return 'librecrawl' in body
+    except Exception:
+        return False
+
+
+def resolve_network_options():
+    """Work out the bind address and port.
+
+    Defaults keep the historical behaviour when run from a checkout, Docker or
+    a server (0.0.0.0:5000), but the packaged desktop app binds to localhost
+    only so it is not silently exposed to the local network.
+    """
+    default_host = '127.0.0.1' if is_frozen() else '0.0.0.0'
+    host = args.host or os.getenv('HOST_BINDING') or default_host
+    port = args.port or int(os.getenv('PORT') or 5000)
+    return host, port
+
+
+def _pause_before_exit():
+    """Keep the console window open after a fatal error so it can be read."""
+    try:
+        if sys.stdin and sys.stdin.isatty():
+            input("\nPress Enter to close...")
+    except Exception:
+        pass
+
+
 def main():
     import signal
 
-    # Register signal handlers for graceful shutdown
-    signal.signal(signal.SIGINT, graceful_shutdown)
-    signal.signal(signal.SIGTERM, graceful_shutdown)
+    host, port = resolve_network_options()
+    display_host = 'localhost' if host in ('0.0.0.0', '127.0.0.1', '::', '') else host
+    url = f'http://{display_host}:{port}'
+
+    # Register signal handlers for graceful shutdown. SIGTERM is not
+    # available everywhere, and on Windows it only arrives from the console.
+    try:
+        signal.signal(signal.SIGINT, graceful_shutdown)
+        signal.signal(signal.SIGTERM, graceful_shutdown)
+    except (AttributeError, ValueError, OSError):
+        pass
+
+    print("=" * 60)
+    print("LibreCrawl - SEO Spider")
+    print("=" * 60)
+
+    # Launching the desktop app twice should open the running one instead of
+    # failing with an "address already in use" error the user cannot dismiss.
+    if _is_librecrawl_running(host, port):
+        print(f"LibreCrawl is already running at {url} - opening it instead.")
+        webbrowser.open(url)
+        return
+
+    # Hold a named mutex for the lifetime of the process. The Windows
+    # installer checks LibreCrawlDesktop (AppMutex in installer.iss) and refuses
+    # to replace files while the app is running. No-op off Windows. The handle
+    # is deliberately never closed: closing it would remove the mutex.
+    global APP_MUTEX_HANDLE
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            APP_MUTEX_HANDLE = ctypes.windll.kernel32.CreateMutexW(
+                None, False, 'LibreCrawlDesktop')
+        except Exception as e:
+            print(f"Could not create app mutex: {e}")
 
     # Recover any crashed crawls from previous session
     recover_crashed_crawls()
@@ -2209,30 +2440,49 @@ def main():
     # Start cleanup thread for old crawler instances
     start_cleanup_thread()
 
-    print("=" * 60)
-    print("LibreCrawl - SEO Spider")
-    print("=" * 60)
-    print(f"\n🚀 Server starting on http://0.0.0.0:5000")
-    print(f"🌐 Access from browser: http://localhost:5000")
-    print(f"📱 Access from network: http://<your-ip>:5000")
-    print(f"\n✨ Multi-tenancy enabled - each browser session is isolated")
-    print(f"💾 Settings stored in browser localStorage")
-    print(f"\nPress Ctrl+C to stop the server\n")
+    print(f"\n🚀 Server starting on http://{host}:{port}")
+    print(f"🌐 Access from browser: {url}")
+    if host in ('0.0.0.0',):
+        print(f"📱 Access from network: http://<your-ip>:{port}")
+    print(f"💾 Data directory: {DATA_DIR}")
+    if BUNDLED_CHROMIUM:
+        print("🎭 Using bundled Chromium for JavaScript rendering")
+    if is_frozen():
+        print(f"📄 Log file: {log_dir() / 'librecrawl.log'}")
+        if FIRST_RUN:
+            print("👋 First run: settings, crawl history and accounts are stored "
+                  "in the data directory above. No sign-in needed.")
+    print("\n✨ Multi-tenancy enabled - each browser session is isolated")
+    if DESKTOP_MODE:
+        print("\nTo stop LibreCrawl, click Quit in the browser window (or close this process).\n")
+    else:
+        print("\nPress Ctrl+C to stop the server\n")
     print("=" * 60 + "\n")
 
-    # Open browser in a separate thread after short delay
-    def open_browser():
-        time.sleep(1.5)  # Wait for Flask to start
-        webbrowser.open('http://localhost:5000')
+    if not args.no_browser:
+        # Open browser in a separate thread after short delay
+        def open_browser():
+            time.sleep(1.5)  # Wait for the server to start
+            webbrowser.open(url)
 
-    browser_thread = threading.Thread(target=open_browser, daemon=True)
-    browser_thread.start()
+        browser_thread = threading.Thread(target=open_browser, daemon=True)
+        browser_thread.start()
 
     # Run Flask server with Waitress (production-grade WSGI server)
     from waitress import serve
-    print("Starting LibreCrawl on http://localhost:5000")
+    print(f"Starting LibreCrawl on {url}")
     print("Using Waitress WSGI server with multi-threading support")
-    serve(app, host='0.0.0.0', port=5000, threads=8)
+    try:
+        serve(app, host=host, port=port, threads=8)
+    except OSError as e:
+        print(f"\n❌ Could not start LibreCrawl on {url}: {e}")
+        print(f"Is the port already in use? Try: {os.path.basename(sys.argv[0])} --port 5001")
+        if is_frozen():
+            _pause_before_exit()
+        raise SystemExit(1)
+    except KeyboardInterrupt:
+        graceful_shutdown(None, None)
+
 
 if __name__ == '__main__':
     main()

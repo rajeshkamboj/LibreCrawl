@@ -61,3 +61,22 @@ It verifies, on every run:
 
 On failure it prints the poll history (sequence numbers, event counts, epoch
 changes) so the violation can be explained rather than just reported.
+
+## packaging_tests.py
+
+Tests for the packaged Windows app (`.exe`). They simulate a frozen build, so
+they run on any OS without a compiled exe:
+
+```bash
+python tests/packaging_tests.py
+```
+
+| Test | What breaks if it fails |
+|---|---|
+| `test_source_checkout_keeps_repo_data_dir` | Running from a checkout or Docker starts writing to `%APPDATA%` instead of `data/`, breaking volume mounts and existing installs |
+| `test_frozen_windows_uses_appdata` | The frozen app tries to create its database inside the read-only install directory and cannot start |
+| `test_data_dir_override` | `LIBRECRAWL_DATA_DIR` (portable installs) is ignored |
+| `test_secret_key_persists` | A new random key every launch logs the user out on restart |
+| `test_bundled_chromium_detection` | Bundled Chromium is not found (JS rendering fails), or a user-set `PLAYWRIGHT_BROWSERS_PATH` is overwritten |
+| `test_resource_paths_follow_meipass` | Templates/static files are looked for next to the `.exe` instead of inside the bundle, so the UI returns 500s |
+| `test_pyinstaller_hook_collects_playwright_driver` | The Playwright hook ships 118 driver files with a wrong `dest` (a file path instead of its folder), and PyInstaller aborts the build with "already exists a file at that path" |

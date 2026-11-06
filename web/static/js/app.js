@@ -2307,6 +2307,36 @@ function isValidUrl(string) {
 
 // This is defined in settings.js - no need to redefine here
 
+async function quitLibreCrawl() {
+    // Desktop (.exe) only: save running crawls and stop the local server.
+    const running = document.getElementById('stopBtn');
+    const crawling = running && !running.disabled;
+    const message = crawling
+        ? 'A crawl is still running. Stop LibreCrawl anyway? Any progress will be saved first.'
+        : 'Quit LibreCrawl?';
+    if (!confirm(message)) return;
+
+    const button = document.getElementById('quitBtn');
+    if (button) {
+        button.disabled = true;
+        button.textContent = 'Stopping...';
+    }
+    try {
+        await fetch('/api/desktop/quit', { method: 'POST' });
+    } catch (error) {
+        // The server exits while answering, so a network error here is expected.
+        console.log('LibreCrawl server stopped.');
+    }
+    document.body.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:center;height:100vh;
+                    font-family:Inter,system-ui,sans-serif;color:#374151;">
+            <div style="text-align:center;">
+                <h1 style="font-size:22px;margin-bottom:8px;">LibreCrawl has stopped</h1>
+                <p>You can close this tab. Start LibreCrawl again from the Start menu.</p>
+            </div>
+        </div>`;
+}
+
 async function logout() {
     try {
         const response = await fetch('/api/logout', {
