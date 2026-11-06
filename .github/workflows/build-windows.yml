@@ -89,9 +89,14 @@ jobs:
             # workflow annotations are readable from the API and the run page.
             Write-Host "::error::Build failed: $($_.Exception.Message)"
             if (Test-Path build.log) {
-              $tail = Get-Content build.log -Tail 80
-              foreach ($line in $tail) {
-                if ($line -match '\S') { Write-Host "::error::$line" }
+              # Annotations are readable from the API and the run page, so put
+              # the actual error there rather than 80 lines of pip/pyi INFO.
+              $errors = Select-String -Path build.log -Pattern 'ERROR|Error:|Traceback|Exception|failed|Fatal' |
+                        Select-Object -Last 30
+              if (-not $errors) { $errors = Get-Content build.log -Tail 30 }
+              foreach ($e in $errors) {
+                $text = if ($e -is [string]) { $e } else { $e.Line }
+                if ($text -match '\S') { Write-Host "::error::$text" }
               }
             }
             exit 1

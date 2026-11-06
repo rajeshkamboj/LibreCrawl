@@ -87,8 +87,19 @@ Write-Host "==> Wrote packaging\version_info.txt for $Version"
 Write-Host "==> Running PyInstaller" -ForegroundColor Cyan
 if (Test-Path dist) { Remove-Item -Recurse -Force dist }
 if (Test-Path build) { Remove-Item -Recurse -Force build }
-& $Python -m PyInstaller --noconfirm --clean packaging\librecrawl.spec
-if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
+# Tee-Object needs the directory to exist before PyInstaller starts writing.
+New-Item -ItemType Directory -Force -Path (Join-Path $RepoRoot "build") | Out-Null
+$pyiLog = Join-Path $RepoRoot "build\pyinstaller.log"
+& $Python -m PyInstaller --noconfirm --clean packaging\librecrawl.spec *>&1 |
+    Tee-Object -FilePath $pyiLog
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "--- PyInstaller errors ---" -ForegroundColor Red
+    $errors = Select-String -Path $pyiLog -Pattern 'ERROR|Error:|Traceback|Exception|ModuleNotFound|SyntaxError' |
+              Select-Object -Last 25
+    if ($errors) { $errors | ForEach-Object { Write-Host $_.Line } }
+    else { Get-Content $pyiLog -Tail 40 | ForEach-Object { Write-Host $_ } }
+    throw "PyInstaller failed (full log: $pyiLog)"
+}
 if (-not (Test-Path "dist\LibreCrawl\LibreCrawl.exe")) {
     throw "PyInstaller did not produce dist\LibreCrawl\LibreCrawl.exe"
 }
