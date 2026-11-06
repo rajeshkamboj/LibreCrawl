@@ -85,32 +85,23 @@ Type: dirifempty; Name: "{app}"
 [Code]
 const
   // Matches the named mutex main.py creates (CreateMutexW) while the desktop
-  // server runs.
+  // server runs, and the AppMutex directive above.
   AppMutexName = 'LibreCrawlDesktop';
-
-function IsLibreCrawlRunning(): Boolean;
-var
-  Mutex: THandle;
-begin
-  Mutex := OpenMutex(SYNCHRONIZE, False, AppMutexName);
-  Result := Mutex <> 0;
-  if Result then
-    CloseHandle(Mutex);
-end;
 
 // LibreCrawl is a long-running local server, so installing over a running copy
 // would try to replace files that are in use. Ask the user to quit first (the
 // app has a Quit button) instead of failing halfway through with a file-in-use
-// error.
+// error. Inno Setup's AppMutex directive prompts as well; this runs earlier so
+// the message can say exactly what to click.
 function InitializeSetup(): Boolean;
 var
   Answer: Integer;
 begin
   Result := True;
-  while IsLibreCrawlRunning() do
+  while CheckForMutexes(AppMutexName) do
   begin
     Answer := MsgBox('LibreCrawl is still running.' + #13#10#13#10 +
-                     'Click Quit in the LibreCrawl browser window, then click Retry to continue.' + #13#10 +
+                     'Click Quit in the LibreCrawl browser window, then click Retry.' + #13#10 +
                      'Any running crawl is saved before the app closes.',
                      mbError, MB_RETRYCANCEL);
     if Answer <> IDRETRY then
